@@ -1,33 +1,47 @@
+use std::{borrow::Cow, pin::Pin, task::{Context, Poll}, io};
 use color_eyre::eyre;
 use sha2::{Sha256, Digest};
-use tokio::{fs::File, io::{AsyncRead, AsyncWrite, AsyncReadExt, AsyncWriteExt}};
-use std::{borrow::Cow::Owned, pin::Pin, task::{Context, Poll}, io};
+use tokio::io::{AsyncWrite, AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tracing_error::ErrorLayer;
+use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter, Registry, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 const REPL_PATH_LEN : usize = 44;
 const CHUNK : usize = 50; // MUST be bigger than REPL_PATH_LEN
 
-#[tokio::main]
-async fn main() -> eyre::Result<()> {
-  let reader = File::open("file.nar").await?;
-  let mut writer = AsyncSha256Hasher::new();
-  replace_nix_paths(reader, &mut writer).await?;
-  let hash = writer.finalize();
-  println!("{}", hex::encode(hash));
+pub fn setup_logging() -> eyre::Result<()> {
+  color_eyre::install()?;
+
+  let format_layer = tracing_subscriber::fmt::layer()
+    .with_span_events(FmtSpan::NONE)
+    .with_filter(
+      EnvFilter::from_default_env()
+        .add_directive("info".parse()?)
+    );
+  
+  let r = Registry::default()
+    .with(ErrorLayer::default())
+    .with(format_layer);
+
+  #[cfg(tokio_unstable)]
+  let r = r.with(console_subscriber::spawn());
+  
+  r.init();
+
   Ok(())
 }
 
-struct AsyncSha256Hasher {
+pub struct AsyncSha256Hasher {
   hasher: Sha256
 }
 
 impl AsyncSha256Hasher {
-  fn new() -> Self {
+  pub fn new() -> Self {
     Self {
       hasher: Sha256::new()
     }
   }
 
-  fn finalize(self) -> [u8; 32] {
+  pub fn finalize(self) -> [u8; 32] {
     self.hasher.finalize().into()
   }
 }
@@ -47,8 +61,7 @@ impl AsyncWrite for AsyncSha256Hasher {
   }
 }
 
-
-async fn replace_nix_paths(mut reader: impl AsyncRead + Unpin, mut writer: impl AsyncWrite + Unpin) -> eyre::Result<()> {
+pub async fn replace_nix_paths(mut reader: impl AsyncRead + Unpin, mut writer: impl AsyncWrite + Unpin) -> eyre::Result<()> {
   // the first CHUNK bytes contains the current chunk
   // the last REPL_PATH_LEN bytes contains the beginning of the next chunk
   // this is necessary to be able to search and replace over the chunk boundary
@@ -56,6 +69,7 @@ async fn replace_nix_paths(mut reader: impl AsyncRead + Unpin, mut writer: impl 
   // the first CHUNK bytes contains the next chunk
   // the last REPL_PATH_LEN bytes contains the begining the current chunk potentially modified by the search and replace of the previous loop cycle
   let mut buf_ahead = [0; CHUNK + REPL_PATH_LEN ];
+
   let mut buf_l;
   let mut buf_ahead_l;
 
@@ -88,7 +102,7 @@ async fn replace_nix_paths(mut reader: impl AsyncRead + Unpin, mut writer: impl 
     // actual search and replace.
     // doesn't replace in place in memory but if nothing is found, no copy is done.
     let r = regex.replace_all(&buf[..proc_l], b"/nix/store/00000000000000000000000000000000-");
-    if let Owned(v) = r {
+    if let Cow::Owned(v) = r {
       buf[..proc_l].copy_from_slice(&v);
     }
 
