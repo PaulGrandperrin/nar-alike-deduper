@@ -37,14 +37,14 @@ async fn get_commit_date(revision: &str) -> eyre::Result<DateTime<Utc>> {
 }
 
 #[tracing::instrument(fields(revision))]
-async fn update(branch: &str, system: &str) -> eyre::Result<()> {
+async fn update(branch: &str, system: &str, db_addr: &str) -> eyre::Result<()> {
   tracing::info!("start");
 
   let regex = Regex::new(r"^(.*?)-([^a-zA-Z].*)$")?; // mimics https://github.com/NixOS/nix/blob/0fb5024d8df46a47f5367c5b0a51f0b2f6d50032/src/libstore/names.cc#L30
 
   let pool = PgPoolOptions::new()
     .max_connections(5)
-    .connect("postgresql://postgres@10.42.0.7/nar-dedup").await?;
+    .connect(&format!("postgresql://postgres@{db_addr}/nar-dedup")).await?;
 
   tracing::info!("connected to db");
 
@@ -161,11 +161,14 @@ async fn delete() -> eyre::Result<()> {
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
   nar_alike_deduper::setup_logging()?;
+  let db_addr = std::env::var("DB_ADDR").unwrap_or("10.42.0.7".to_string());
 
   loop {
-    update("nixos-23.11", "x86_64-linux").await?;
-    tracing::info!("sleeping 60 sec");
-    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    if let Err(e) = update("nixos-23.11", "x86_64-linux", &db_addr).await {
+      tracing::error!(?e);
+    }
+    tracing::info!("sleeping 5 min");
+    tokio::time::sleep(std::time::Duration::from_secs(5 * 60)).await;
   }
 
 }
