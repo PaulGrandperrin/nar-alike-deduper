@@ -4,7 +4,7 @@ use color_eyre::eyre::{self, OptionExt};
 use duct::cmd;
 use regex::Regex;
 use reqwest::header::USER_AGENT;
-use sqlx::{postgres::PgPoolOptions, pool};
+use sqlx::postgres::PgPoolOptions;
 
 
 async fn get_latest_revision(branch: &str) -> eyre::Result<String> {
@@ -40,8 +40,6 @@ async fn get_commit_date(revision: &str) -> eyre::Result<DateTime<Utc>> {
 #[tracing::instrument(fields(revision))]
 async fn update(branch: &str, system: &str, db_addr: &str) -> eyre::Result<()> {
   tracing::info!("start");
-
-  let regex = Regex::new(r"^(.*?)-([^a-zA-Z].*)$")?; // mimics https://github.com/NixOS/nix/blob/0fb5024d8df46a47f5367c5b0a51f0b2f6d50032/src/libstore/names.cc#L30
 
   let pool = PgPoolOptions::new()
     .max_connections(5)
@@ -102,12 +100,14 @@ async fn update(branch: &str, system: &str, db_addr: &str) -> eyre::Result<()> {
   let (send, recv) = async_channel::bounded(1000);
   let tasks = (0..128).map(|thread_id| {
     tracing::info!(thread_id, "starting insertion");
+
     let recv: Receiver<serde_json::Value> = recv.clone();
     let branch = branch.to_owned();
     let system = system.to_owned();
-    let regex = regex.clone();
     let revision = revision.to_owned();
     let pool = pool.clone();
+    let regex = Regex::new(r"^(.*?)-([^a-zA-Z].*)$").unwrap(); // mimics https://github.com/NixOS/nix/blob/0fb5024d8df46a47f5367c5b0a51f0b2f6d50032/src/libstore/names.cc#L30
+
     tokio::task::spawn(async move {
 
       while let Ok(drv) = recv.recv().await {
@@ -204,5 +204,4 @@ async fn main() -> eyre::Result<()> {
     tracing::info!("sleeping 5 min");
     tokio::time::sleep(std::time::Duration::from_secs(5 * 60)).await;
   }
-
 }
