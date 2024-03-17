@@ -1,9 +1,10 @@
+use async_channel::Receiver;
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::{self, OptionExt};
 use duct::cmd;
 use regex::Regex;
 use reqwest::header::USER_AGENT;
-use sqlx::postgres::PgPoolOptions;
+use sqlx::{postgres::PgPoolOptions, pool};
 
 
 async fn get_latest_revision(branch: &str) -> eyre::Result<String> {
@@ -98,38 +99,71 @@ async fn update(branch: &str, system: &str, db_addr: &str) -> eyre::Result<()> {
 
   let commit_date = get_commit_date(&revision).await?;
 
+  let (send, recv) = async_channel::bounded(1000);
+  let tasks = (0..128).map(|thread_id| {
+    tracing::info!(thread_id, "starting insertion");
+    let recv: Receiver<serde_json::Value> = recv.clone();
+    let branch = branch.to_owned();
+    let system = system.to_owned();
+    let regex = regex.clone();
+    let revision = revision.to_owned();
+    let pool = pool.clone();
+    tokio::task::spawn(async move {
+
+      while let Ok(drv) = recv.recv().await {
+        let r: eyre::Result<()> = async {
+          let drv = drv.as_object().ok_or_eyre("bad json")?;
+
+          let path = drv.get("name").ok_or_eyre("bad json")?
+            .as_array().ok_or_eyre("bad json")?
+            .iter().map(|v| v.as_str().unwrap_or_default()).collect::<Vec<_>>().join(".");
+
+          let store_paths = drv.get("value").ok_or_eyre("bad json")?
+            .as_array().ok_or_eyre("bad json")?
+            .iter().map(|v| v.as_str().unwrap_or_default()).collect::<Vec<_>>();
+
+          for sp in store_paths {
+            let sh = sp[11..43].to_string();
+            let name = sp[44..].to_string();
+
+            let (pname, version) = match regex.captures(&name) {
+              Some(c) => (c.get(1).map(|e| e.as_str()), c.get(2).map(|e| e.as_str())),
+              None => (None, None)
+            }; 
+
+            sqlx::query("insert into store_hashes
+              (branch, revision, system, commit_date, path, name, pname, version, store_hash)
+              values ($1, $2, $3, $4, $5, $6, $7, $8, $9)")
+              .bind(branch.to_owned())
+              .bind(revision.to_owned())
+              .bind(system.to_owned())
+              .bind(commit_date)
+              .bind(path.clone()) 
+              .bind(name.clone()) 
+              .bind(pname)
+              .bind(version)
+              .bind(sh)
+              .execute(&pool).await?;
+          }
+
+          Ok(())
+        }.await;
+
+        if let Err(e) = r {
+          tracing::error!(thread_id, ?e);
+        } 
+
+      }
+
+    })
+  }).collect::<Vec<_>>();
+
   for drv in json.as_array().ok_or_eyre("bad json")? {
-    let drv = drv.as_object().ok_or_eyre("bad json")?;
-    let path = drv.get("name").ok_or_eyre("bad json")?
-      .as_array().ok_or_eyre("bad json")?
-      .iter().map(|v| v.as_str().unwrap_or_default()).collect::<Vec<_>>().join(".");
-    let store_paths = drv.get("value").ok_or_eyre("bad json")?
-      .as_array().ok_or_eyre("bad json")?
-      .iter().map(|v| v.as_str().unwrap_or_default()).collect::<Vec<_>>();
+    send.send(drv.to_owned()).await?;
+  }
 
-    for sp in store_paths {
-      let sh = sp[11..43].to_string();
-      let name = sp[44..].to_string();
-
-      let (pname, version) = match regex.captures(&name) {
-        Some(c) => (c.get(1).map(|e| e.as_str()), c.get(2).map(|e| e.as_str())),
-        None => (None, None)
-      }; 
-
-      sqlx::query("insert into store_hashes
-        (branch, revision, system, commit_date, path, name, pname, version, store_hash)
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9)")
-        .bind(branch)
-        .bind(revision.clone())
-        .bind(system)
-        .bind(commit_date)
-        .bind(path.clone()) 
-        .bind(name.clone()) 
-        .bind(pname)
-        .bind(version)
-        .bind(sh)
-        .execute(&pool).await?;
-    }
+  for h in tasks {
+    h.await?;
   }
 
   sqlx::query("insert into completed_drv_sets
