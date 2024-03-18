@@ -1,3 +1,5 @@
+mod store_path_automaton;
+
 use std::{borrow::Cow, pin::Pin, task::{Context, Poll}, io};
 use color_eyre::eyre;
 use sha2::{Sha256, Digest};
