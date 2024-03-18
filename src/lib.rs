@@ -63,6 +63,7 @@ impl AsyncWrite for AsyncSha256Hasher {
   }
 }
 
+
 pub async fn replace_nix_paths(mut reader: impl AsyncRead + Unpin, mut writer: impl AsyncWrite + Unpin) -> eyre::Result<()> {
   // the first CHUNK bytes contains the current chunk
   // the last REPL_PATH_LEN bytes contains the beginning of the next chunk
@@ -79,7 +80,15 @@ pub async fn replace_nix_paths(mut reader: impl AsyncRead + Unpin, mut writer: i
   let regex = regex::bytes::Regex::new(r"/nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}\-")?;
 
   // read first chunk to the first part of the buffer
-  buf_l = reader.read(&mut buf[..CHUNK]).await?;
+  // read multiple times until the chunk is filled or the end of the stream is reached (l == 0)
+  buf_l = 0;
+  loop {
+    let l = reader.read(&mut buf[buf_l..CHUNK]).await?;
+    buf_l += l;
+    if l == 0 || buf_l == CHUNK {
+      break;
+    }
+  }
   // Artifically setup the second part of the ahead buffer with the first REPL_PATH_LEN bytes from buf.
   // Those bytes are later used to carry overlapping replacements over from the last chunk to the next.
   buf_ahead[CHUNK..].copy_from_slice(&buf[..REPL_PATH_LEN]);
@@ -89,7 +98,15 @@ pub async fn replace_nix_paths(mut reader: impl AsyncRead + Unpin, mut writer: i
     // and that the last REPL_PATH_LEN bytes of buf_ahead contains what might need to be carried over from the search and replace of the last chunk.
 
     // read ahead the next chunk to the first part of the ahead buffer
-    buf_ahead_l = reader.read(&mut buf_ahead[..CHUNK]).await?;
+    // read multiple times until the chunk is filled or the end of the stream is reached (l == 0)
+    buf_ahead_l = 0;
+    loop {
+      let l = reader.read(&mut buf_ahead[buf_ahead_l..CHUNK]).await?;
+      buf_ahead_l += l;
+      if l == 0 || buf_ahead_l == CHUNK {
+        break;
+      }
+    }
     
     // Complete the second part of the buffer with the beginning of the next chunk.
     buf[CHUNK..].copy_from_slice(&buf_ahead[..REPL_PATH_LEN]);
@@ -121,4 +138,25 @@ pub async fn replace_nix_paths(mut reader: impl AsyncRead + Unpin, mut writer: i
   }
 
   Ok(())
+}
+
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use tokio::io::{AsyncRead, AsyncWrite};
+  use std::io::Cursor;
+
+  fn helper() {
+
+  }
+
+  #[tokio::test]
+  async fn test_replace_nix_paths() -> eyre::Result<()> {
+    let mut r = Cursor::new(b"/nix/store/abcdfghijklmnpqrsvwxyz0000000000-");
+    let mut w = Vec::new();
+    replace_nix_paths(&mut r, &mut w).await?;
+    assert_eq!(w, b"/nix/store/00000000000000000000000000000000-");
+    Ok(())
+  }
 }
