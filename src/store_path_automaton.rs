@@ -1,3 +1,30 @@
+use tokio::io::AsyncRead;
+
+
+
+struct StorePathReader<R> {
+  reader: R,
+  automaton: StorePathAutomaton,
+}
+
+impl<R: AsyncRead> StorePathReader<R> {
+  pub fn new(reader: R) -> Self {
+    Self {
+      reader,
+      automaton: StorePathAutomaton::new(),
+    }
+  }
+}
+
+impl<R: AsyncRead> AsyncRead for StorePathReader<R> {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        todo!()
+    }
+}
 
 /// Custom automaton to match store paths.
 /// 
