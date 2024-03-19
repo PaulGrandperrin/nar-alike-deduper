@@ -1,6 +1,6 @@
 mod store_path_automaton;
 
-use std::{borrow::Cow, pin::Pin, task::{Context, Poll}, io};
+use std::{borrow::Cow, pin::Pin, task::{Context, Poll}, io, collections::HashMap};
 use color_eyre::eyre;
 use sha2::{Sha256, Digest};
 use tokio::io::{AsyncWrite, AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -64,7 +64,7 @@ impl AsyncWrite for AsyncSha256Hasher {
 }
 
 
-pub async fn replace_nix_paths(mut reader: impl AsyncRead + Unpin, mut writer: impl AsyncWrite + Unpin) -> eyre::Result<()> {
+pub async fn replace_nix_paths(mut reader: impl AsyncRead + Unpin, mut writer: impl AsyncWrite + Unpin, replacements: HashMap<[u8;32], [u8;32]>) -> eyre::Result<bool> {
   // the first CHUNK bytes contains the current chunk
   // the last REPL_PATH_LEN bytes contains the beginning of the next chunk
   // this is necessary to be able to search and replace over the chunk boundary
@@ -119,10 +119,14 @@ pub async fn replace_nix_paths(mut reader: impl AsyncRead + Unpin, mut writer: i
     let proc_l = buf_l + (buf_ahead_l).min(REPL_PATH_LEN);
 
     // actual search and replace.
-    // doesn't replace in place in memory but if nothing is found, no copy is done.
-    let r = regex.replace_all(&buf[..proc_l], b"/nix/store/00000000000000000000000000000000-");
-    if let Cow::Owned(v) = r {
-      buf[..proc_l].copy_from_slice(&v);
+    let hash_offsets = regex.find_iter(&buf[..proc_l]).map(|m| m.start() + 11).collect::<Vec<_>>();
+    for hash_offset in hash_offsets {
+      let b: &[u8; 32] = &buf[hash_offset .. hash_offset + 32].try_into().unwrap();
+      if let Some(r) = replacements.get(b) {
+        buf[hash_offset .. hash_offset + 32].copy_from_slice(r);
+      } else {
+        return Ok(false);
+      }
     }
 
     if buf_ahead_l == CHUNK { // if there's more chunks to read
@@ -137,7 +141,7 @@ pub async fn replace_nix_paths(mut reader: impl AsyncRead + Unpin, mut writer: i
     std::mem::swap(&mut buf_l, &mut buf_ahead_l);
   }
 
-  Ok(())
+  Ok(true)
 }
 
 
@@ -151,12 +155,16 @@ mod tests {
 
   }
 
+  // TODO write a structure-aware custom mutator for fuzzing
+
   #[tokio::test]
   async fn test_replace_nix_paths() -> eyre::Result<()> {
-    let mut r = Cursor::new(b"/nix/store/abcdfghijklmnpqrsvwxyz0000000000-");
+    let mut r = Cursor::new(b"abc /nix/store/abcdfghijklmnpqrsvwxyz0000000000- abc");
     let mut w = Vec::new();
-    replace_nix_paths(&mut r, &mut w).await?;
-    assert_eq!(w, b"/nix/store/00000000000000000000000000000000-");
+    let mut repl = HashMap::new();
+    repl.insert(b"abcdfghijklmnpqrsvwxyz0000000000".to_owned().try_into().unwrap(), b"00000000000000000000000000000000".to_owned().try_into().unwrap());
+    let r = replace_nix_paths(&mut r, &mut w, repl).await?;
+    assert_eq!(w, b"abc /nix/store/00000000000000000000000000000000- abc");
     Ok(())
   }
 }

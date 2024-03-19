@@ -127,6 +127,8 @@ mod tests {
     r
   }
 
+  // TODO write a structure-aware custom mutator for fuzzing
+
   #[test]
   fn matches() {
     assert_eq!(helper(b"/nix/store/01234567890000000000000000000000-"), true);
