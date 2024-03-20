@@ -18,42 +18,40 @@ trait ResultExt<T: IntoResponse> {
   fn err_with_status(self, status: StatusCode) -> Result<T>;
 } 
 
-impl<T: IntoResponse, E: Into<eyre::Report>> ResultExt<T> for std::result::Result<T, E> {
+impl<T: IntoResponse, E: std::fmt::Debug + 'static > ResultExt<T> for std::result::Result<T, E> {
   fn err_with_status(self, status:StatusCode) -> Result<T> {
     self.map_err(|e| {
-      Error::with_status(status, e)
+      Error::new(status, e)
     })
   }
 }
 
 struct Error {
   status: StatusCode,
-  report: eyre::Report,
+  report: Box<dyn std::fmt::Debug>,
 }
 
 impl Error {
-  fn with_status(status: StatusCode, err: impl Into<eyre::Report>) -> Self {
+  fn new(status: StatusCode, err: impl std::fmt::Debug + 'static) -> Self {
     Self {
       status,
-      report: err.into(),
+      report: Box::new(err),
     }
   }
 }
 
-impl<E: Into<eyre::Report>> From<E> for Error
+impl<E: std::fmt::Debug + 'static > From<E> for Error
 {
   fn from(e: E) -> Self {
-    Self {
-      status: StatusCode::INTERNAL_SERVER_ERROR,
-      report: e.into(), 
-    }
+    Self::new(StatusCode::INTERNAL_SERVER_ERROR, e)
   }
 }
 
 impl IntoResponse for Error {
   fn into_response(self) -> Response {
-    tracing::error!(error = ?self.report);
-    (self.status, format!("{:?}", self.report)).into_response()
+    let report = format!("{:?}", self.report);
+    tracing::error!(error = %report);
+    (self.status, report).into_response()
   }
 }
 
