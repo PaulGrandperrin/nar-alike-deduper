@@ -20,7 +20,7 @@ pub fn setup_logging() -> eyre::Result<()> {
     .with_span_events(FmtSpan::NONE)
     .with_filter(
       EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        "trace".into()
+        "info".into()
       })
     );
   
