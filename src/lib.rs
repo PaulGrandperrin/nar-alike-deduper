@@ -1,9 +1,12 @@
 mod store_path_automaton;
 
 use std::{borrow::Cow, pin::Pin, task::{Context, Poll}, io, collections::HashMap};
+use axum::{http::Request, extract::MatchedPath};
 use color_eyre::eyre;
 use sha2::{Sha256, Digest};
 use tokio::io::{AsyncWrite, AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tower_http::trace::TraceLayer;
+use tracing::{info_span, Span};
 use tracing_error::ErrorLayer;
 use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter, Registry, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -16,8 +19,9 @@ pub fn setup_logging() -> eyre::Result<()> {
   let format_layer = tracing_subscriber::fmt::layer()
     .with_span_events(FmtSpan::NONE)
     .with_filter(
-      EnvFilter::from_default_env()
-        .add_directive("info".parse()?)
+      EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        "trace".into()
+      })
     );
   
   let r = Registry::default()

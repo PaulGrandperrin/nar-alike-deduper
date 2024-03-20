@@ -33,6 +33,62 @@
     imports = [
       devenv.flakeModule
     ];
+    
+    flake = {
+      nixosModules = rec {
+        default = nar-alike-deduper;
+        nar-alike-deduper = { config, lib, pkgs, ... }: with lib; let 
+          cfg = config.nar-alike-deduper;
+        in {
+          options = {
+            nar-alike-deduper = {
+              enable = mkEnableOption "nar-alike-deduper";
+              #port = mkOption {
+              #  type = types.int;
+              #  default = 8080;
+              #  description = "The port to listen on";
+              #};
+            };
+          };
+          config = mkIf cfg.enable {
+            nix.settings.extra-substituters = [
+              #"http://localhost:4488"
+            ];
+
+            nix.settings.substituters = [
+              "http://localhost:4489"
+            ];
+
+
+            users.users.nar-alike-deduper = {
+              isSystemUser = true;
+              group = "nar-alike-deduper";
+              createHome = true;
+              home = "/var/lib/nar-alike-deduper";
+              #shell = pkgs.bashInteractive;
+            };
+            users.groups.nar-alike-deduper = {};
+      
+      
+            systemd.services."nar-alike-deduper" = {
+              description = "Dedups similar NARs";
+              wantedBy = ["multi-user.target"];
+              after = [ "network.target" "network-online.target"];
+      
+              serviceConfig = {
+                ExecStart = "${inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.default}/bin/substituer"; # --port ${toString cfg.port}";
+                Restart = "always";
+                RestartSec = "5";
+                User = "nar-alike-deduper";
+                Group = "nar-alike-deduper";
+                WorkingDirectory = config.users.users.nar-alike-deduper.home;
+              };
+            };
+      
+          };
+        };
+      };
+    };
 
     systems = nixpkgs.lib.systems.flakeExposed;
 
