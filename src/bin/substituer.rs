@@ -1,8 +1,8 @@
-use std::{io, time::Duration};
+use std::{io, time::Duration, error::Error};
 
 use axum::{Router, routing::get, response::{IntoResponse, Response}, extract::{State, Path, MatchedPath}, http::{StatusCode, Request}};
 use chrono::format;
-use color_eyre::eyre;
+use color_eyre::eyre::{self, anyhow};
 use serde::{Deserialize, Serialize};
 use tower_http::{trace::TraceLayer, classify::ServerErrorsFailureClass};
 use tracing::{info_span, Span};
@@ -11,47 +11,47 @@ use tracing::{info_span, Span};
 trait IntoResultReponse: IntoResponse {}
 impl<T: IntoResponse> IntoResultReponse for Result<T> {}
 
-type Result<T, E = Error> = std::result::Result<T, E>;
+type Result<T, E = HttpError> = std::result::Result<T, E>;
 
 /// A extention trait to Result to easily convert an error into a `HttpError` with a status code.
 trait ResultExt<T: IntoResponse> {
   fn err_with_status(self, status: StatusCode) -> Result<T>;
 } 
 
-impl<T: IntoResponse, E: std::fmt::Debug + 'static > ResultExt<T> for std::result::Result<T, E> {
+impl<T: IntoResponse, E: Into<Box<dyn Error>>> ResultExt<T> for std::result::Result<T, E> {
   fn err_with_status(self, status:StatusCode) -> Result<T> {
-    self.map_err(|e| {
-      Error::new(status, e)
+    self.map_err(|error| {
+      HttpError::new(status, error)
     })
   }
 }
 
-struct Error {
+struct HttpError {
   status: StatusCode,
-  report: Box<dyn std::fmt::Debug>,
+  error: Box<dyn Error>,
 }
 
-impl Error {
-  fn new(status: StatusCode, err: impl std::fmt::Debug + 'static) -> Self {
+impl HttpError {
+  fn new(status: StatusCode, error: impl Into<Box<dyn Error>>) -> Self {
     Self {
       status,
-      report: Box::new(err),
+      error: error.into(),
     }
   }
 }
 
-impl<E: std::fmt::Debug + 'static > From<E> for Error
+impl<E: Into<Box<dyn Error>> > From<E> for HttpError
 {
-  fn from(e: E) -> Self {
-    Self::new(StatusCode::INTERNAL_SERVER_ERROR, e)
+  fn from(error: E) -> Self {
+    Self::new(StatusCode::INTERNAL_SERVER_ERROR, error)
   }
 }
 
-impl IntoResponse for Error {
+impl IntoResponse for HttpError {
   fn into_response(self) -> Response {
-    let report = format!("{:?}", self.report);
-    tracing::error!(error = %report);
-    (self.status, report).into_response()
+    let error = format!("{:?}", self.error);
+    tracing::error!(error = %error);
+    (self.status, error).into_response()
   }
 }
 
@@ -73,9 +73,6 @@ struct Params {
 
 async fn get_path(State(state): State<()>, Path(params): Path<Params>) -> impl IntoResultReponse { // Result<impl IntoResponse, HttpError> {
   let r = reqwest::Client::new().get(format!("https://cache.nixos.org/{}", params.path)).send().await?;
-  if r.status() != 200 {
-    return Err(eyre::eyre!("upstream error").into());
-  }
   Ok((StatusCode::from_u16(u16::from(r.status())).unwrap(), r.bytes().await?))
 }
 
