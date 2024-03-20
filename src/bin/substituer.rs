@@ -11,7 +11,7 @@ use tracing::{info_span, Span};
 trait IntoResultReponse: IntoResponse {}
 impl<T: IntoResponse> IntoResultReponse for Result<T> {}
 
-type Result<T> = std::result::Result<T, Error>;
+type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// A extention trait to Result to easily convert an error into a `HttpError` with a status code.
 trait ResultExt<T: IntoResponse> {
@@ -52,6 +52,7 @@ impl<E: Into<eyre::Report>> From<E> for Error
 
 impl IntoResponse for Error {
   fn into_response(self) -> Response {
+    tracing::error!(error = ?self.report);
     (self.status, format!("{:?}", self.report)).into_response()
   }
 }
@@ -73,8 +74,7 @@ struct Params {
 }
 
 async fn get_path(State(state): State<()>, Path(params): Path<Params>) -> impl IntoResultReponse { // Result<impl IntoResponse, HttpError> {
-  tracing::info!(params.path, "GET");  
-  let r = reqwest::Client::new().get(format!("https://cache.nixos.orgd/{}", params.path)).send().await?;
+  let r = reqwest::Client::new().get(format!("https://cache.nixos.org/{}", params.path)).send().await?;
   if r.status() != 200 {
     return Err(eyre::eyre!("upstream error").into());
   }
@@ -105,7 +105,7 @@ pub async fn http_server(state: ()) -> io::Result<()> {
           .on_request(|_request: &Request<_>, _span: &Span| {
             tracing::info!("handling request");
           })
-          .on_failure(()) // TraceLayer traces failures by default but already do it manually
+          //.on_failure(()) // TraceLayer traces failures by default but already do it manually
         )
         .with_state(state);
 
