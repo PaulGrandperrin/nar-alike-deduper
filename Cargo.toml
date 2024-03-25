@@ -1,5 +1,3 @@
-#cargo-features = ["codegen-backend"]
-
 [package]
 name = "nar-alike-deduper"
 version = "0.1.0"
@@ -31,6 +29,3 @@ async-stream = "0.3" # create Streams by yielding
 tokio-util = { version = "0.7", features = [ "full" ]} # conversions between Async(Read|Write) and Stream/Sink
 
 nix-base32 = "0.1"
-
-#[profile.dev]
-#codegen-backend = "cranelift"

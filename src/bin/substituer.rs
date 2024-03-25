@@ -1,6 +1,6 @@
 use std::{io, time::Duration, error::Error};
 
-use axum::{Router, routing::get, response::{IntoResponse, Response}, extract::{State, Path, MatchedPath}, http::{StatusCode, Request}};
+use axum::{Router, routing::get, response::{IntoResponse, Response}, extract::{State, Path, MatchedPath}, http::{StatusCode, Request}, body::Body};
 use chrono::format;
 use color_eyre::eyre::{self, anyhow};
 use serde::{Deserialize, Serialize};
@@ -71,9 +71,11 @@ struct Params {
   path: String
 }
 
-async fn get_path(State(state): State<()>, Path(params): Path<Params>) -> impl IntoResultReponse { // Result<impl IntoResponse, HttpError> {
+async fn get_path(State(state): State<()>, Path(params): Path<Params>) -> impl IntoResultReponse {
   let r = reqwest::Client::new().get(format!("https://cache.nixos.org/{}", params.path)).send().await?;
-  Ok((StatusCode::from_u16(u16::from(r.status())).unwrap(), r.bytes().await?))
+  let status = StatusCode::from_u16(u16::from(r.status())).unwrap();
+  let body = Body::from_stream(r.bytes_stream());
+  Ok((status, body))
 }
 
 async fn nix_cache_info() -> Result<impl IntoResponse> {
@@ -105,7 +107,7 @@ pub async fn http_server(state: ()) -> io::Result<()> {
         .with_state(state);
 
 
-    let listener = tokio::net::TcpListener::bind("localhost:4489")
+    let listener = tokio::net::TcpListener::bind("localhost:4490")
         .await
         .unwrap();
     tracing::debug!("listening on {}", listener.local_addr().unwrap());
