@@ -8,6 +8,22 @@
         nixpkgs-lib.follows = "nixpkgs"; 
       };
     };
+
+    fenix = {
+      url = "github:nix-community/fenix/monthly"; # we don't want to update the nightly toolchain every day
+      inputs = {
+        nixpkgs.follows = "nixpkgs";
+      };
+    };
+
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs = {
+        nixpkgs.follows = "nixpkgs";
+        #flake-utils.follows = "flake-utils";
+      };
+    };
+
     devenv = {
       url = "github:cachix/devenv";
       inputs = {
@@ -17,13 +33,7 @@
         #pre-commit-hooks.follows = "pre-commit-hooks-nix";
       };
     };
-    rust-overlay = {
-      url = "github:oxalica/rust-overlay";
-      inputs = {
-        nixpkgs.follows = "nixpkgs";
-        #flake-utils.follows = "flake-utils";
-      };
-    };
+
     crane = { # eventually, use dream2nix when it's more stable
       url = "github:ipetkov/crane";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -33,6 +43,8 @@
     imports = [
       devenv.flakeModule
     ];
+
+    systems = nixpkgs.lib.systems.flakeExposed;
     
     flake = {
       nixosModules = rec {
@@ -90,14 +102,14 @@
       };
     };
 
-    systems = nixpkgs.lib.systems.flakeExposed;
 
-    perSystem = {pkgs, system, ...}: let
-      #rustToolchain = (inputs.rust-overlay.overlays.default pkgs pkgs).rust-bin.stable.latest.default;
-      rustToolchain = inputs.rust-overlay.packages.${system}.rust;
+    perSystem = {pkgs, system, inputs', ...}: let
+      rustToolchain = (pkgs.extend inputs.rust-overlay.overlays.default).rust-bin.selectLatestNightlyWith (toolchain: toolchain.default.override { extensions = ["rustc-codegen-cranelift-preview"]; });
+      #rustToolchain = inputs'.fenix.packages.complete.withComponents ["rustc" "cargo" "rustfmt" "rust-std" "rust-docs" "rust-analyzer" "clippy" "miri" "rust-src" "rustc-codegen-cranelift-preview"];
       craneLib = (inputs.crane.mkLib pkgs).overrideToolchain rustToolchain;
     in {
       packages = rec {
+        inherit rustToolchain;
         nar-alike-deduper = pkgs.callPackage (
           {pkgs, ...}: let
           in craneLib.buildPackage {
@@ -111,8 +123,19 @@
 
       devenv.shells.default = {
         languages.nix.enable = true;
+        languages.rust = {
+          enable = true;
+          toolchain = {
+            rustc = rustToolchain;
+            cargo = rustToolchain;
+            clippy = rustToolchain;
+            rustfmt = rustToolchain;
+            rust-analyzer = rustToolchain;
+          };
+        };
+        env.RUSTFLAGS="-Zcodegen-backend=cranelift -C linker=${pkgs.clang_17}/bin/clang -C link-arg=-fuse-ld=${pkgs.mold}/bin/mold";
         packages = with pkgs; [
-          rustToolchain
+          #rustToolchain
           xh
         ];
       };
